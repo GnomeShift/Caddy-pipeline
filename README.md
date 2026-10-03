@@ -1,0 +1,36 @@
+<h1>
+<p align="center">
+<a href="https://github.com/GnomeShift/Caddy-builder" target="_blank" rel="noopener noreferrer">Caddy-builder</a>
+</p>
+</h1>
+
+# 🌐 Overview
+Pipeline for custom [Caddy](https://caddyserver.com/)-alpine Docker images builds.
+
+[![Custom Caddy image build](https://img.shields.io/github/actions/workflow/status/GnomeShift/Caddy-builder/build-caddy.yml?logo=github&label=Build%20Caddy)](https://github.com/GnomeShift/Caddy-builder/actions/workflows/build-caddy.yml)
+[![Docker image size](https://img.shields.io/docker/image-size/gnomeshift/caddy?logo=docker)](https://hub.docker.com/r/gnomeshift/caddy)
+[![License](https://img.shields.io/github/license/GnomeShift/Caddy-builder?color=%239944ee)](https://github.com/GnomeShift/Caddy-builder/blob/master/LICENSE)
+
+## 🌟 Features
+- Latest Caddy version autodetect.
+- TODO: MANUAL VERSION ENTER HERE
+- Caddy modules support.
+- Multi-arch (linux/amd64, linux/arm64).
+- Manual start via GitHub Actions.
+
+## 🚀 Quick start
+1. Add secret `DOCKERHUB_PASSWORD` and variable `DOCKERHUB_LOGIN` on the `Settings` -> `Secrets and variables` -> `Actions` tab.
+2. Start pipeline via GitHub Actions.
+3. Specify build params (optional):
+   - Caddy modules to include (space-separated, default: `github.com/caddy-dns/cloudflare github.com/greenpau/caddy-security github.com/mholt/caddy-l4`).
+   - Docker image name (default: caddy).
+   - TODO: DOCKERHUB BYPASS HERE
+4. Click on `Run workflow` button.
+5. Done! You can view build summary on the pipeline page.
+
+<p align="center">
+   <i>© GnomeShift 2026 - present</i><br>
+   <i>Licensed under <a href="https://github.com/GnomeShift/Caddy-builder/blob/HEAD/LICENSE">Apache-2.0</a></i><br><br>
+   <i>Credits:</i><br>
+   <i><a href="https://github.com/caddyserver/caddy/blob/master/LICENSE">Caddy</a> licensed under Apache-2.0</i><br>
+</p>

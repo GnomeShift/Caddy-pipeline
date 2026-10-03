@@ -1,0 +1,234 @@
+name: Build custom Caddy Docker image
+
+on:
+  workflow_dispatch:
+    inputs:
+      caddy_modules:
+        description: 'Caddy modules to include (space-separated)'
+        required: true
+        default: 'github.com/caddy-dns/cloudflare github.com/greenpau/caddy-security github.com/mholt/caddy-l4'
+      docker_image_name:
+        description: 'Docker image name'
+        required: true
+        default: 'caddy'
+      caddy_version:
+        description: 'Caddy version to build'
+        required: false
+        default: 'latest'
+
+concurrency:
+  group: caddy-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  resolve-versions:
+    name: 'Resolve Caddy and Docker Hub base versions'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      caddy_version: ${{ steps.caddy.outputs.version }}
+      caddy_full_tag: ${{ steps.caddy.outputs.full_tag }}
+      caddy_base_version: ${{ steps.base.outputs.base_version }}
+      bypass_mode: ${{ steps.base.outputs.bypass_mode }}
+    steps:
+      - name: 'Get selected Caddy release'
+        id: caddy
+        env:
+          INPUT_VERSION: ${{ inputs.caddy_version }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          API=https://api.github.com/repos/caddyserver/caddy/releases
+
+          if [ -z "$INPUT_VERSION" ] || [ "$INPUT_VERSION" = "latest" ]; then
+            LATEST_TAG=$(curl -fsSL \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "${API}/latest" | jq -er .tag_name)
+          else
+            VERSION="${INPUT_VERSION#v}"
+            if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Invalid Caddy version: $INPUT_VERSION" >&2
+              exit 1
+            fi
+            LATEST_TAG="v${VERSION}"
+            curl -fsSL \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "${API}/tags/${LATEST_TAG}" | jq -er .tag_name >/dev/null
+          fi
+
+          VERSION="${LATEST_TAG#v}"
+          echo "Selected Caddy release: ${LATEST_TAG}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "full_tag=${LATEST_TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: 'Resolve Docker Hub base image version'
+        id: base
+        env:
+          TARGET_VERSION: ${{ steps.caddy.outputs.version }}
+          # TODO: Change after v3 release or fallback will find only v2.x
+          MAJOR: "2"
+        run: |
+          set -uo pipefail
+          DH_API="https://hub.docker.com/v2/repositories/library/caddy/tags"
+
+          if curl -fsSL "${DH_API}/${TARGET_VERSION}-alpine" >/dev/null 2>&1 && \
+             curl -fsSL "${DH_API}/${TARGET_VERSION}-builder-alpine" >/dev/null 2>&1; then
+            echo "caddy:${TARGET_VERSION}-alpine and builder tag available"
+            BASE_VERSION="${TARGET_VERSION}"
+            BYPASS_MODE=false
+          else
+            echo "caddy:${TARGET_VERSION} tags are not both available; selecting the newest published versioned Alpine pair"
+            CANDIDATES=$(curl -fsSL "${DH_API}?page_size=100&name=${MAJOR}." \
+              | jq -r '.results[].name | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+-alpine$"))' \
+              | sed 's/-alpine$//' | sort -V -r)
+
+            BASE_VERSION=""
+            while IFS= read -r candidate; do
+              [ -n "$candidate" ] || continue
+              if curl -fsSL "${DH_API}/${candidate}-builder-alpine" >/dev/null 2>&1 && \
+                 curl -fsSL "${DH_API}/${candidate}-alpine" >/dev/null 2>&1; then
+                BASE_VERSION="$candidate"
+                break
+              fi
+            done <<< "$CANDIDATES"
+
+            if [ -z "$BASE_VERSION" ]; then
+              echo "::error::Docker Hub API unavailable or no published tags ${MAJOR}.x.y-builder-alpine found."
+              exit 1
+            fi
+            BYPASS_MODE=true
+          fi
+
+          echo "Resolved base version: ${BASE_VERSION}"
+          echo "base_version=${BASE_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "bypass_mode=${BYPASS_MODE}" >> "$GITHUB_OUTPUT"
+
+  build-and-push:
+    name: 'Build and push'
+    needs: resolve-versions
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      CADDY_VERSION_TAG: ${{ needs.resolve-versions.outputs.caddy_version }}
+      CADDY_VERSION_FULL: ${{ needs.resolve-versions.outputs.caddy_full_tag }}
+      CADDY_BASE_TAG: ${{ needs.resolve-versions.outputs.caddy_base_version }}
+      BYPASS_MODE: ${{ needs.resolve-versions.outputs.bypass_mode }}
+      DOCKER_IMAGE: ${{ vars.DOCKERHUB_LOGIN }}/${{ inputs.docker_image_name }}
+      CACHE_SCOPE: caddy-official
+
+    steps:
+      - name: 'Checkout code'
+        uses: actions/checkout@v5
+
+      - name: 'Setup QEMU'
+        uses: docker/setup-qemu-action@v4
+
+      - name: 'Setup Docker Buildx'
+        id: buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: 'Login to Docker Hub'
+        uses: docker/login-action@v4
+        with:
+          username: ${{ vars.DOCKERHUB_LOGIN }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+
+      - name: 'Build and push Caddy image'
+        uses: docker/build-push-action@v7
+        env:
+          BUILDKIT_PROGRESS: plain
+        with:
+          context: .
+          file: ./Dockerfile
+          pull: true
+          push: true
+          tags: |
+            ${{ env.DOCKER_IMAGE }}:${{ env.CADDY_VERSION_TAG }}-alpine
+            ${{ env.DOCKER_IMAGE }}:latest
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha,scope=${{ env.CACHE_SCOPE }}
+          cache-to: type=gha,mode=max,scope=${{ env.CACHE_SCOPE }},ignore-error=true
+          build-args: |
+            CADDY_TARGET_VERSION=${{ env.CADDY_VERSION_TAG }}
+            CADDY_BASE_VERSION=${{ env.CADDY_BASE_TAG }}
+            CADDY_MODULES=${{ inputs.caddy_modules }}
+          sbom: true
+          provenance: mode=min
+
+      - name: 'Verify the pushed image'
+        if: success()
+        continue-on-error: true
+        env:
+          IMAGE: ${{ env.DOCKER_IMAGE }}
+          TAG: ${{ env.CADDY_VERSION_TAG }}-alpine
+        run: |
+          set -uo pipefail
+          {
+            echo "### Pushed image verification"
+            echo ""
+            for p in linux/amd64 linux/arm64; do
+              echo "- \`${IMAGE}:${TAG}\` (${p}): \`$(docker run --rm --platform "$p" "${IMAGE}:${TAG}" caddy version 2>&1 | head -n1)\`"
+            done
+            echo ""
+            echo "Expect \`v${CADDY_VERSION_TAG}\` or \`${CADDY_VERSION_TAG}\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 'Cache diag'
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          {
+            echo "### Build cache"
+            echo ""
+            echo "- **buildx:** \`$(docker buildx version)\`"
+            echo "- **Caddy target:** \`${CADDY_VERSION_FULL}\`  **base:** \`${CADDY_BASE_TAG}\`"
+            echo "- **gha scope:** \`caddy-official\`"
+            echo "- **resolved base digests:**"
+            echo ""
+            echo '```'
+            for p in linux/amd64 linux/arm64; do
+              d=$(docker buildx imagetools inspect --format '{{ .Manifest.Digest }}' \
+                    --platform "$p" "caddy:${CADDY_BASE_TAG}-builder-alpine" 2>/dev/null || echo "n/a")
+              echo "  ${p} caddy:${CADDY_BASE_TAG}-builder-alpine -> ${d}"
+            done
+            echo '```'
+            echo ""
+            echo "Cache entries:"
+            echo ""
+            echo '```'
+            gh api "repos/${GH_REPO}/actions/caches" \
+              --jq '.actions_caches[] | "\(.key)\t\((.size_in_bytes/1048576)|floor)MB\tcreated=\(.created_at)\tlast=\(.last_accessed_at)\tref=\(.ref)"' \
+              2>/dev/null || echo "  (n/a)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 'Summary'
+        if: always()
+        env:
+          MODULES_INPUT: ${{ inputs.caddy_modules }}
+        run: |
+          {
+            echo "## ✅ Caddy image build complete"
+            echo ""
+            echo "- **Caddy version:** \`${CADDY_VERSION_FULL}\`"
+            if [ "$BYPASS_MODE" = "true" ]; then
+              echo "- **Base:** \`caddy:${CADDY_BASE_TAG}-builder-alpine\` / \`caddy:${CADDY_BASE_TAG}-alpine\` (\`${CADDY_VERSION_TAG}\` tags not both published yet)"
+            else
+              echo "- **Base:** \`caddy:${CADDY_BASE_TAG}-builder-alpine\` / \`caddy:${CADDY_BASE_TAG}-alpine\`"
+            fi
+            echo "- **Image:** \`${DOCKER_IMAGE}\`"
+            echo "- **Tags:** \`${DOCKER_IMAGE}:${CADDY_VERSION_TAG}-alpine\`, \`${DOCKER_IMAGE}:latest\`"
+            echo "- **Modules included:**"
+            echo ""
+            printf '```\n'
+            printf '%s\n' "$MODULES_INPUT" | tr ' ' '\n'
+            printf '```\n'
+          } >> "$GITHUB_STEP_SUMMARY"
