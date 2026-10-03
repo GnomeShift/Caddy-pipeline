@@ -10,7 +10,7 @@ on:
       docker_image_name:
         description: 'Docker image name'
         required: true
-        default: 'caddy'
+        default: 'caddy-test'
       caddy_version:
         description: 'Caddy version to build'
         required: false
