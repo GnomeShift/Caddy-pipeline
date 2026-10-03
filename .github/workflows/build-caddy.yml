@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   resolve-versions:
-    name: 'Resolve Caddy and Docker Hub base versions'
+    name: 'Resolve base versions'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -80,7 +80,7 @@ jobs:
             BASE_VERSION="${TARGET_VERSION}"
             BYPASS_MODE=false
           else
-            echo "caddy:${TARGET_VERSION} tags are not both available; selecting the newest published versioned Alpine pair"
+            echo "caddy:${TARGET_VERSION} tags are unavailable; selecting the newest published Alpine pair"
             CANDIDATES=$(curl -fsSL "${DH_API}?page_size=100&name=${MAJOR}." \
               | jq -r '.results[].name | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+-alpine$"))' \
               | sed 's/-alpine$//' | sort -V -r)
@@ -96,7 +96,7 @@ jobs:
             done <<< "$CANDIDATES"
 
             if [ -z "$BASE_VERSION" ]; then
-              echo "::error::Docker Hub API unavailable or no published tags ${MAJOR}.x.y-builder-alpine found."
+              echo "::error::Docker Hub API unavailable or no published tags ${MAJOR}.x.y-builder-alpine found"
               exit 1
             fi
             BYPASS_MODE=true
@@ -160,56 +160,6 @@ jobs:
           sbom: true
           provenance: mode=min
 
-      - name: 'Verify the pushed image'
-        if: success()
-        continue-on-error: true
-        env:
-          IMAGE: ${{ env.DOCKER_IMAGE }}
-          TAG: ${{ env.CADDY_VERSION_TAG }}-alpine
-        run: |
-          set -uo pipefail
-          {
-            echo "### Pushed image verification"
-            echo ""
-            for p in linux/amd64 linux/arm64; do
-              echo "- \`${IMAGE}:${TAG}\` (${p}): \`$(docker run --rm --platform "$p" "${IMAGE}:${TAG}" caddy version 2>&1 | head -n1)\`"
-            done
-            echo ""
-            echo "Expect \`v${CADDY_VERSION_TAG}\` or \`${CADDY_VERSION_TAG}\`."
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: 'Cache diag'
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          set -uo pipefail
-          {
-            echo "### Build cache"
-            echo ""
-            echo "- **buildx:** \`$(docker buildx version)\`"
-            echo "- **Caddy target:** \`${CADDY_VERSION_FULL}\`  **base:** \`${CADDY_BASE_TAG}\`"
-            echo "- **gha scope:** \`caddy-official\`"
-            echo "- **resolved base digests:**"
-            echo ""
-            echo '```'
-            for p in linux/amd64 linux/arm64; do
-              d=$(docker buildx imagetools inspect --format '{{ .Manifest.Digest }}' \
-                    --platform "$p" "caddy:${CADDY_BASE_TAG}-builder-alpine" 2>/dev/null || echo "n/a")
-              echo "  ${p} caddy:${CADDY_BASE_TAG}-builder-alpine -> ${d}"
-            done
-            echo '```'
-            echo ""
-            echo "Cache entries:"
-            echo ""
-            echo '```'
-            gh api "repos/${GH_REPO}/actions/caches" \
-              --jq '.actions_caches[] | "\(.key)\t\((.size_in_bytes/1048576)|floor)MB\tcreated=\(.created_at)\tlast=\(.last_accessed_at)\tref=\(.ref)"' \
-              2>/dev/null || echo "  (n/a)"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
       - name: 'Summary'
         if: always()
         env:
@@ -219,13 +169,13 @@ jobs:
             echo "## ✅ Caddy image build complete"
             echo ""
             echo "- **Caddy version:** \`${CADDY_VERSION_FULL}\`"
+            echo "- **Image:** \`${DOCKER_IMAGE}\`"
             if [ "$BYPASS_MODE" = "true" ]; then
-              echo "- **Base:** \`caddy:${CADDY_BASE_TAG}-builder-alpine\` / \`caddy:${CADDY_BASE_TAG}-alpine\` (\`${CADDY_VERSION_TAG}\` tags not both published yet)"
-            else
               echo "- **Base:** \`caddy:${CADDY_BASE_TAG}-builder-alpine\` / \`caddy:${CADDY_BASE_TAG}-alpine\`"
             fi
-            echo "- **Image:** \`${DOCKER_IMAGE}\`"
-            echo "- **Tags:** \`${DOCKER_IMAGE}:${CADDY_VERSION_TAG}-alpine\`, \`${DOCKER_IMAGE}:latest\`"
+            echo "- **Tags:**"
+            echo "  - \`${DOCKER_IMAGE}:${CADDY_VERSION_TAG}-alpine\`"
+            echo "  - \`${DOCKER_IMAGE}:latest\`"
             echo "- **Modules included:**"
             echo ""
             printf '```\n'
