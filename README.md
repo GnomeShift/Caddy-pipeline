@@ -13,7 +13,7 @@ Pipeline for custom [Caddy](https://caddyserver.com/)-alpine Docker images build
 
 ## 🌟 Features
 - Latest Caddy version autodetect.
-- TODO: MANUAL VERSION ENTER HERE
+- Docker Hub bypass mode to build directly from GitHub (e.g., latest tag isn't pushed to Docker Hub yet).
 - Caddy modules support.
 - Multi-arch (linux/amd64, linux/arm64).
 - Manual start via GitHub Actions.
@@ -24,7 +24,7 @@ Pipeline for custom [Caddy](https://caddyserver.com/)-alpine Docker images build
 3. Specify build params (optional):
    - Caddy modules to include (space-separated, default: `github.com/caddy-dns/cloudflare github.com/greenpau/caddy-security github.com/mholt/caddy-l4`).
    - Docker image name (default: caddy).
-   - TODO: DOCKERHUB BYPASS HERE
+   - Caddy version to build (default: latest).
 4. Click on `Run workflow` button.
 5. Done! You can view build summary on the pipeline page.
 
