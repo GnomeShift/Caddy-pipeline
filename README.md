@@ -8,7 +8,7 @@
 Pipeline for custom [Caddy](https://caddyserver.com/)-alpine Docker images builds.
 
 [![Custom Caddy image build](https://img.shields.io/github/actions/workflow/status/GnomeShift/Caddy-pipeline/build-caddy.yml?logo=github&label=Build%20Caddy)](https://github.com/GnomeShift/Caddy-pipeline/actions/workflows/build-caddy.yml)
-[![Docker image size](https://img.shields.io/docker/image-size/gnomeshift/caddy?logo=docker)](https://hub.docker.com/r/gnomeshift/caddy)
+[![Docker image size](https://img.shields.io/docker/image-size/gnomeshift/caddy-test?logo=docker)](https://hub.docker.com/r/gnomeshift/caddy-test)
 [![License](https://img.shields.io/github/license/GnomeShift/Caddy-pipeline?color=%239944ee)](https://github.com/GnomeShift/Caddy-pipeline/blob/master/LICENSE)
 
 ## 🌟 Features
