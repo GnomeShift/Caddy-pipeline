@@ -64,6 +64,18 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "full_tag=${LATEST_TAG}" >> "$GITHUB_OUTPUT"
 
+      - name: Validate module input
+        env:
+          MODULES: ${{ inputs.caddy_modules }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$MODULES" =~ ^[A-Za-z0-9._/-]+([[:space:]]+[A-Za-z0-9._/-]+)*$ ]]; then
+            echo "::error::Incorrect module list: '$MODULES'."
+            echo "::error::Space-separated list expected."
+            exit 1
+          fi
+          echo "Module list accepted: $MODULES"
+
       - name: 'Resolve Docker Hub base image version'
         id: base
         env:
@@ -112,6 +124,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      actions: read
       packages: write
     env:
       CADDY_VERSION_TAG: ${{ needs.resolve-versions.outputs.caddy_version }}
@@ -119,6 +132,7 @@ jobs:
       CADDY_BASE_TAG: ${{ needs.resolve-versions.outputs.caddy_base_version }}
       BYPASS_MODE: ${{ needs.resolve-versions.outputs.bypass_mode }}
       DOCKER_IMAGE: ${{ vars.DOCKERHUB_LOGIN }}/${{ inputs.docker_image_name }}
+      CADDY_ALPINE_VERSION: "3.23"
       CACHE_SCOPE: caddy-official
 
     steps:
@@ -139,6 +153,7 @@ jobs:
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
       - name: 'Build and push Caddy image'
+        id: build
         uses: docker/build-push-action@v7
         env:
           BUILDKIT_PROGRESS: plain
@@ -156,9 +171,46 @@ jobs:
           build-args: |
             CADDY_TARGET_VERSION=${{ env.CADDY_VERSION_TAG }}
             CADDY_BASE_VERSION=${{ env.CADDY_BASE_TAG }}
+            CADDY_ALPINE_VERSION=${{ env.CADDY_ALPINE_VERSION }}
             CADDY_MODULES=${{ inputs.caddy_modules }}
           sbom: true
           provenance: mode=min
+
+      - name: Trivy scan
+        if: success()
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: 'image'
+          image-ref: ${{ env.DOCKER_IMAGE }}@${{ steps.build.outputs.digest }}
+          format: 'table'
+          output: 'trivy-official.txt'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          exit-code: '0'
+
+      - name: Vulnerability report
+        if: always()
+        run: |
+          {
+            echo "### Vulnerabilities"
+            echo ""
+            found=0
+            for pair in "official:trivy-official.txt"; do
+              label="${pair%%:*}"
+              f="${pair#*:}"
+              if [ -s "$f" ]; then
+                found=1
+                echo "#### $label"
+                echo ""
+                echo '```'
+                cat "$f"
+                echo '```'
+                echo ""
+              fi
+            done
+            [ "$found" = 1 ] || echo "_Scan failed, see pipeline logs_"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: 'Summary'
         if: always()
