@@ -1,7 +1,5 @@
 <h1>
-<p align="center">
-<a href="https://github.com/GnomeShift/Caddy-pipeline" target="_blank" rel="noopener noreferrer">Caddy-pipeline</a>
-</p>
+<p align="center">Caddy-pipeline</p>
 </h1>
 
 # 🌐 Overview
