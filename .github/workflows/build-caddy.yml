@@ -241,7 +241,6 @@ jobs:
             | . + { __class: ($r.Class // "unknown") }
           ] as $v
           | ($v | length) as $total
-          | ($v | map(select(.Severity == "CRITICAL" or .Severity == "HIGH")) | length) as $act
           | ($v | map(.Severity) | unique | sort_by(sev_rank)) as $seen
           | (
               if $total == 0 then
@@ -267,11 +266,9 @@ jobs:
           JQEOF
 
           {
-            echo "### Vulnerabilities"
+            echo "### 🛡️ Vulnerabilities"
             for pair in "trivy-official.json"; do
-              label="${pair%%:*}"
               f="${pair#*:}"
-              echo "#### $label"
               echo ""
               if [ -s "$f" ] && jq -e . "$f" >/dev/null 2>&1; then
                 jq -r -f .trivy-report.jq "$f" \
