@@ -244,7 +244,7 @@ jobs:
           | ($v | map(.Severity) | unique | sort_by(sev_rank)) as $seen
           | (
               if $total == 0 then
-                "_No findings._\n"
+                "_✅ No findings_\n"
               else
                 "**Total findings: \($total)**\n\n"
                 + "| Severity | Found |\n|:--|--:|\n"
@@ -272,9 +272,9 @@ jobs:
               echo ""
               if [ -s "$f" ] && jq -e . "$f" >/dev/null 2>&1; then
                 jq -r -f .trivy-report.jq "$f" \
-                  || echo "_jq failed to parse summary_"
+                  || echo "_❌ jq failed to parse summary_"
               else
-                echo "_Scan failed_"
+                echo "_❌ Scan failed_"
               fi
               echo ""
             done
