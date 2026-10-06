@@ -218,7 +218,7 @@ jobs:
           image-ref: ${{ env.DOCKER_IMAGE }}@${{ needs.build-and-push.outputs.digest }}
           format: 'json'
           output: 'trivy-official.json'
-          severity: 'CRITICAL,HIGH,MEDIUM'
+          severity: 'UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL'
           exit-code: '0'
 
       - name: 'Scan summary'
@@ -233,40 +233,30 @@ jobs:
             elif . == "LOW"      then "🔵 LOW"
             else "⚪ " + . end;
 
-          def cell: gsub("\\|"; "/") | gsub("\\n"; " ");
-          def sev_rank: if . == "CRITICAL" then 0 elif . == "HIGH" then 1 elif . == "MEDIUM" then 2 else 3 end;
+          def cell: gsub("\\|"; "/") | gsub("\n"; " ");
+          def sev_rank: if . == "CRITICAL" then 0 elif . == "HIGH" then 1 elif . == "MEDIUM" then 2 elif . == "LOW" then 3 else 4 end;
 
           [ .Results[]? as $r
             | ($r.Vulnerabilities // [])[]
             | . + { __class: ($r.Class // "unknown") }
           ] as $v
           | ($v | length) as $total
-          | ($v | map(select(.Severity == "CRITICAL")) | length) as $nc
-          | ($v | map(select(.Severity == "HIGH"))     | length) as $nh
+          | ($v | map(select(.Severity == "CRITICAL" or .Severity == "HIGH")) | length) as $act
           | ($v | map(.Severity) | unique | sort_by(sev_rank)) as $seen
           | (
               if $total == 0 then
-                "_No CRITICAL/HIGH findings._\n"
+                "_No findings._\n"
               else
                 "**Total findings: \($total)**\n\n"
                 + "| Severity | Found |\n|:--|--:|\n"
                 + (reduce $seen[] as $s ("";
                     . + "| \($s | sev_badge) | \($v | map(select(.Severity == $s)) | length) |\n"))
                 + "\n"
-                + "| Severity | CVE | Package | Installed | Fixed in | Source |\n"
-                + "|:--|:--|:--|:--|:--|:--|\n"
+                + "| Severity | CVE | Package | Installed | Fixed in | Source |\n|:--|:--|:--|:--|:--|:--|\n"
                 + ($v
-                   | sort_by([(.Severity | sev_rank), (.VulnerabilityID // ""), (.PkgName // "")])
+                   | sort_by([ (.Severity | sev_rank), (.VulnerabilityID // ""), (.PkgName // "") ])
                    | .[:50]
-                   | map(
-                       "| \(.Severity | sev_badge) "
-                       + "| \((.VulnerabilityID // "-") | cell) "
-                       + "| \((.PkgName // "-") | cell) "
-                       + "| \((.InstalledVersion // "-") | cell) "
-                       + "| \(if ((.FixedVersion // "") | length) == 0 then "no fix" else (.FixedVersion | cell) end) "
-                       + "| \(.__class | cell) "
-                       + "|"
-                     )
+                   | map("| \(.Severity | sev_badge) | \(.VulnerabilityID // "?" | cell) | \(.PkgName // "?" | cell) | \(.InstalledVersion // "?" | cell) | \(.FixedVersion // "-" | cell) | \(.__class | cell) |")
                    | join("\n"))
                 + "\n"
                 + (if $total > 50
