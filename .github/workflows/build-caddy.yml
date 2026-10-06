@@ -218,7 +218,7 @@ jobs:
           image-ref: ${{ env.DOCKER_IMAGE }}@${{ needs.build-and-push.outputs.digest }}
           format: 'json'
           output: 'trivy-official.json'
-          severity: 'UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL'
+          severity: 'LOW,MEDIUM,HIGH,CRITICAL'
           exit-code: '0'
 
       - name: 'Scan summary'
@@ -268,7 +268,7 @@ jobs:
 
           {
             echo "### Vulnerabilities"
-            for pair in "official / alpine:trivy-official.json"; do
+            for pair in "trivy-official.json"; do
               label="${pair%%:*}"
               f="${pair#*:}"
               echo "#### $label"
