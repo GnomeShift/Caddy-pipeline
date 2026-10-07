@@ -2,9 +2,9 @@
 ARG CADDY_TARGET_VERSION=2.11.7
 
 # Version of the builder-alpine and alpine images that exist in Docker Hub
-ARG CADDY_BASE_VERSION=2.11.4
+ARG CADDY_BASE_VERSION=2.11.7
 
-# caddy:2.11-alpine uses pinned tag
+# Runtime base that caddy:2.11-alpine uses
 ARG CADDY_ALPINE_VERSION=3.23
 
 # Stage 1: Build
@@ -25,9 +25,14 @@ RUN set -eu; \
     CGO_ENABLED=0 xcaddy build "${CADDY_VERSION}" \
       --output /build/caddy "$@" && \
     BUILT="$(/build/caddy version | head -n1)"; \
+    case "$BUILT" in \
+      "${CADDY_VERSION}"|"${CADDY_VERSION} "*|"${CADDY_VERSION}+"*) echo "built ${BUILT}" ;; \
+      *) echo "VERSION MISMATCH: expected '${CADDY_VERSION}', got '${BUILT}'" >&2; exit 1 ;; \
+    esac && \
     setcap cap_net_bind_service=+ep /build/caddy && \
     CAP="$(getcap /build/caddy)" && \
-    [ -n "$CAP" ] || { echo "FATAL: setcap had no effect" >&2; exit 1; };
+    [ -n "$CAP" ] || { echo "FATAL: setcap had no effect" >&2; exit 1; }; \
+    echo "capability on built binary: $CAP"
 
 # Stage 2: Alpine
 FROM alpine:${CADDY_ALPINE_VERSION}
@@ -35,8 +40,13 @@ FROM alpine:${CADDY_ALPINE_VERSION}
 RUN apk add --no-cache ca-certificates curl libcap mailcap
 
 RUN set -eux; \
-	mkdir -p /config/caddy /data/caddy /etc/caddy /usr/share/caddy ; \
-	chmod 1777 /config/caddy /data/caddy
+	mkdir -p /config/caddy /data/caddy /etc/caddy /usr/share/caddy; \
+	chmod 1777 /config/caddy /data/caddy; \
+	wget -O /etc/caddy/Caddyfile "https://github.com/caddyserver/dist/raw/33ae08ff08d168572df2956ed14fbc4949880d94/config/Caddyfile"; \
+	wget -O /usr/share/caddy/index.html "https://github.com/caddyserver/dist/raw/33ae08ff08d168572df2956ed14fbc4949880d94/welcome/index.html"; \
+	for f in /etc/caddy/Caddyfile /usr/share/caddy/index.html; do \
+		[ -s "$f" ] || { echo "FATAL: $f is empty" >&2; exit 1; }; \
+	done
 
 ENV XDG_CONFIG_HOME=/config
 ENV XDG_DATA_HOME=/data
@@ -55,7 +65,13 @@ LABEL org.opencontainers.image.version=v${CADDY_TARGET_VERSION} \
 
 COPY --from=builder /build/caddy /usr/bin/caddy
 
-RUN caddy version
+RUN set -eu; \
+    V="$(caddy version | head -n1)"; \
+    echo "$V"; \
+    case "$V" in \
+      "${CADDY_VERSION}"|"${CADDY_VERSION} "*|"${CADDY_VERSION}+"*) ;; \
+      *) echo "FATAL: version '$V', expected ${CADDY_VERSION}" >&2; exit 1 ;; \
+    esac
 
 EXPOSE 80
 EXPOSE 443
@@ -63,8 +79,5 @@ EXPOSE 443/udp
 EXPOSE 2019
 
 WORKDIR /srv
-
-RUN wget -O /etc/caddy/Caddyfile "https://github.com/caddyserver/dist/raw/33ae08ff08d168572df2956ed14fbc4949880d94/config/Caddyfile" \
-    && wget -O /usr/share/caddy/index.html "https://github.com/caddyserver/dist/raw/33ae08ff08d168572df2956ed14fbc4949880d94/welcome/index.html"
 
 CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
