@@ -1,6 +1,4 @@
-<h1>
-<p align="center">Caddy-pipeline</p>
-</h1>
+<h1 align="center">Caddy-pipeline</h1>
 
 # 🌐 Overview
 Pipeline for custom [Caddy](https://caddyserver.com/)-alpine Docker images builds.
