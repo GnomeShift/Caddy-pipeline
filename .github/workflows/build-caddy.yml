@@ -194,10 +194,16 @@ jobs:
             echo "  - \`${DOCKER_IMAGE}:${CADDY_VERSION_TAG}-alpine\`"
             echo "  - \`${DOCKER_IMAGE}:latest\`"
             echo "- **Modules included:**"
-            echo ""
-            printf '```\n'
-            printf '%s\n' "$MODULES_INPUT" | tr ' ' '\n'
-            printf '```\n'
+            MODS="$(docker run --rm --entrypoint caddy "${DOCKER_IMAGE}:${CADDY_VERSION_TAG}-alpine" \
+                      list-modules --versions --packages --skip-standard 2>/dev/null \
+                    | sed 's/^[[:space:]]*//' | grep -v '^$' | grep -v 'modules:' | sort -u)" || MODS=""
+            if [ -n "$MODS" ]; then
+              echo "| Module | Version |"
+              echo "|:--|:--|"
+              printf '%s\n' "$MODS" | awk 'NF>=3 {printf "| `%s` | `%s` |\n", $3, $2}'
+            else
+              echo "Failed to get modules"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
   scan:
