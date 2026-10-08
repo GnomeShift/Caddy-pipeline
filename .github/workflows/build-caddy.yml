@@ -194,14 +194,16 @@ jobs:
             echo "  - \`${DOCKER_IMAGE}:${CADDY_VERSION_TAG}-alpine\`"
             echo "  - \`${DOCKER_IMAGE}:latest\`"
             echo "- **Modules included:**"
+            echo ""
             MODS="$(docker run --rm --entrypoint caddy "${DOCKER_IMAGE}:${CADDY_VERSION_TAG}-alpine" \
                       list-modules --versions --packages --skip-standard 2>/dev/null \
                     | sed 's/^[[:space:]]*//' | grep -v '^$' | grep -v 'modules:' | sort -u)" || MODS=""
             if [ -n "$MODS" ]; then
-              echo "| Module | Version | Total |"
-              echo "|:--|:--|--:|"
+              echo "| Module | Version |"
+              echo "|:--|:--|"
               printf '%s\n' "$MODS" | awk 'NF>=3 {print $3" "$2}' | sort | uniq -c \
               | awk '{printf "| `%s` | `%s` | %d |\n", $2, $3, $1}'
+              echo ""
               printf 'Non-standard modules: `%s`, unique Go-packages: `%s`\n' \
               "$(printf '%s\n' "$MODS" | awk 'NF>=3' | wc -l | tr -d ' ')" \
               "$(printf '%s\n' "$MODS" | awk 'NF>=3 {print $3" "$2}' | sort -u | wc -l | tr -d ' ')"
