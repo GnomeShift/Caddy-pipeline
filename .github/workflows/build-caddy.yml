@@ -198,9 +198,13 @@ jobs:
                       list-modules --versions --packages --skip-standard 2>/dev/null \
                     | sed 's/^[[:space:]]*//' | grep -v '^$' | grep -v 'modules:' | sort -u)" || MODS=""
             if [ -n "$MODS" ]; then
-              echo "| Module | Version |"
-              echo "|:--|:--|"
-              printf '%s\n' "$MODS" | awk 'NF>=3 {printf "| `%s` | `%s` |\n", $3, $2}'
+              echo "| Module | Version | Total |"
+              echo "|:--|:--|--:|"
+              printf '%s\n' "$MODS" | awk 'NF>=3 {print $3" "$2}' | sort | uniq -c \
+              | awk '{printf "| `%s` | `%s` | %d |\n", $2, $3, $1}'
+              printf 'Non-standard modules: `%s`, unique Go-packages: `%s`\n' \
+              "$(printf '%s\n' "$MODS" | awk 'NF>=3' | wc -l | tr -d ' ')" \
+              "$(printf '%s\n' "$MODS" | awk 'NF>=3 {print $3" "$2}' | sort -u | wc -l | tr -d ' ')"
             else
               echo "Failed to get modules"
             fi
