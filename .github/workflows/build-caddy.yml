@@ -31,6 +31,8 @@ jobs:
       caddy_full_tag: ${{ steps.caddy.outputs.full_tag }}
       caddy_base_version: ${{ steps.base.outputs.base_version }}
       bypass_mode: ${{ steps.base.outputs.bypass_mode }}
+      alpine_version: ${{ steps.alpine.outputs.version }}
+      modules: ${{ steps.validate.outputs.modules }}
     steps:
       - name: 'Get selected Caddy release'
         id: caddy
@@ -49,7 +51,7 @@ jobs:
           else
             VERSION="${INPUT_VERSION#v}"
             if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "Invalid Caddy version: $INPUT_VERSION" >&2
+              echo "::error::Invalid Caddy version: $INPUT_VERSION" >&2
               exit 1
             fi
             LATEST_TAG="v${VERSION}"
@@ -65,16 +67,18 @@ jobs:
           echo "full_tag=${LATEST_TAG}" >> "$GITHUB_OUTPUT"
 
       - name: 'Validate module input'
+        id: validate
         env:
           MODULES: ${{ inputs.caddy_modules }}
         run: |
           set -euo pipefail
-          if ! [[ "$MODULES" =~ ^[A-Za-z0-9._/-]+([[:space:]]+[A-Za-z0-9._/-]+)*$ ]]; then
+          if ! [[ "$MODULES" =~ ^[A-Za-z0-9._/-]+(@[A-Za-z0-9._+-]+)?([[:blank:]]+[A-Za-z0-9._/-]+(@[A-Za-z0-9._+-]+)?)*$ ]]; then
             echo "::error::Incorrect module list: '$MODULES'."
             echo "::error::Space-separated list expected."
             exit 1
           fi
           echo "Module list accepted: $MODULES"
+          echo "modules=$MODULES" >> "$GITHUB_OUTPUT"
 
       - name: 'Resolve Docker Hub base image version'
         id: base
@@ -108,15 +112,52 @@ jobs:
             done <<< "$CANDIDATES"
 
             if [ -z "$BASE_VERSION" ]; then
-              echo "::error::Docker Hub API unavailable or no published tags ${MAJOR}.x.y-builder-alpine found"
+              echo "::error::Docker Hub API unavailable or no published tags ${MAJOR}.x.y-builder-alpine found."
               exit 1
             fi
             BYPASS_MODE=true
           fi
 
+          if [ "$BYPASS_MODE" = "true" ]; then
+            echo "::warning::Base image fell back to caddy:${BASE_VERSION}. The binary version will be ${TARGET_VERSION}, but compiled with the ${BASE_VERSION} Go toolchain."
+          fi
+
           echo "Resolved base version: ${BASE_VERSION}"
           echo "base_version=${BASE_VERSION}" >> "$GITHUB_OUTPUT"
           echo "bypass_mode=${BYPASS_MODE}" >> "$GITHUB_OUTPUT"
+
+      - name: 'Resolve Alpine version'
+        id: alpine
+        env:
+          TARGET_VERSION: ${{ steps.caddy.outputs.version }}
+          BASE_VERSION: ${{ steps.base.outputs.base_version }}
+          FALLBACK_ALPINE: "3.24.4"
+        run: |
+          set -uo pipefail
+          ACC="Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json"
+          TOK=$(curl -fsSL "https://auth.docker.io/token?service=registry.docker.io&scope=repository:library/caddy:pull" | jq -er .token)
+
+          alpine_of() { # $1 = caddy version
+            local dig cfg
+            dig=$(curl -fsSL -H "Authorization: Bearer $TOK" -H "$ACC" \
+              "https://registry-1.docker.io/v2/library/caddy/manifests/$1-alpine" \
+              | jq -er '.manifests[] | select(.platform.architecture=="amd64" and .platform.os=="linux" and (.platform.variant==null)) | .digest') || return 1
+            cfg=$(curl -fsSL -H "Authorization: Bearer $TOK" \
+              "https://registry-1.docker.io/v2/library/caddy/blobs/$dig" | jq -er .config.digest) || return 1
+            curl -fsSL -H "Authorization: Bearer $TOK" \
+              "https://registry-1.docker.io/v2/library/caddy/blobs/$cfg" \
+              | jq -er '[.history[].created_by] | map(select(test("alpine-minirootfs-"))) | .[0] | capture("alpine-minirootfs-(?<v>[0-9]+\\.[0-9]+\\.[0-9]+)") | .v'
+          }
+
+          VER="$(alpine_of "$TARGET_VERSION")" || VER=""
+          [ -n "$VER" ] || VER="$(alpine_of "$BASE_VERSION")" || VER=""
+          if [ -n "$VER" ]; then
+            echo "Official caddy:${TARGET_VERSION}-alpine built on Alpine ${VER}"
+          else
+            VER="$FALLBACK_ALPINE"
+            echo "::warning::Could not read the official image config, using fallback Alpine ${VER}."
+          fi
+          echo "version=${VER}" >> "$GITHUB_OUTPUT"
 
   build-and-push:
     name: 'Build and push'
@@ -134,8 +175,9 @@ jobs:
       CADDY_BASE_TAG: ${{ needs.resolve-versions.outputs.caddy_base_version }}
       BYPASS_MODE: ${{ needs.resolve-versions.outputs.bypass_mode }}
       DOCKER_IMAGE: ${{ vars.DOCKERHUB_LOGIN }}/${{ inputs.docker_image_name }}
-      CADDY_ALPINE_VERSION: "3.23"
-      CACHE_SCOPE: caddy-official
+      CADDY_ALPINE_VERSION: ${{ needs.resolve-versions.outputs.alpine_version }}
+      MODULES: ${{ needs.resolve-versions.outputs.modules }}
+      CACHE_SCOPE: caddy-${{ needs.resolve-versions.outputs.caddy_version }}-${{ github.ref_name }}
     steps:
       - name: 'Checkout code'
         uses: actions/checkout@v5
@@ -171,16 +213,14 @@ jobs:
           cache-to: type=gha,mode=max,scope=${{ env.CACHE_SCOPE }},ignore-error=true
           build-args: |
             CADDY_TARGET_VERSION=${{ env.CADDY_VERSION_TAG }}
-            CADDY_BASE_VERSION=${{ env.CADDY_BASE_TAG }}
-            CADDY_ALPINE_VERSION=${{ env.CADDY_ALPINE_VERSION }}
-            CADDY_MODULES=${{ inputs.caddy_modules }}
+            CADDY_BUILDER_REF=caddy:${{ env.CADDY_BASE_TAG }}-builder-alpine
+            CADDY_RUNTIME_REF=alpine:${{ env.CADDY_ALPINE_VERSION }}
+            CADDY_MODULES=${{ env.MODULES }}
           sbom: true
           provenance: mode=min
 
       - name: 'Summary'
         if: always()
-        env:
-          MODULES_INPUT: ${{ inputs.caddy_modules }}
         run: |
           {
             echo "## ✅ Caddy image build complete"
@@ -193,14 +233,15 @@ jobs:
             echo "- **Tags:**"
             echo "  - \`${DOCKER_IMAGE}:${CADDY_VERSION_TAG}-alpine\`"
             echo "  - \`${DOCKER_IMAGE}:latest\`"
+            echo "- **Cache scope:** `${CACHE_SCOPE}`"
             echo "- **Modules included:**"
             echo ""
             MODS="$(docker run --rm --entrypoint caddy "${DOCKER_IMAGE}:${CADDY_VERSION_TAG}-alpine" \
                       list-modules --versions --packages --skip-standard 2>/dev/null \
                     | sed 's/^[[:space:]]*//' | grep -v '^$' | grep -v 'modules:' | sort -u)" || MODS=""
             if [ -n "$MODS" ]; then
-              echo "| Module | Version |"
-              echo "|:--|:--|"
+              echo "| Module | Version | Modules |"
+              echo "|:--|:--|--:|"
               printf '%s\n' "$MODS" | awk 'NF>=3 {print $3" "$2}' | sort | uniq -c \
               | awk '{printf "| `%s` | `%s` | %d |\n", $2, $3, $1}'
               echo ""
