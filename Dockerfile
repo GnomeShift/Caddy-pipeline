@@ -1,17 +1,19 @@
 # Version that xcaddy compiles, may be newer than the published images
-ARG CADDY_TARGET_VERSION=2.11.7
+ARG CADDY_TARGET_VERSION=2.11.9
 
-# Version of the builder-alpine and alpine images that exist in Docker Hub
-ARG CADDY_BASE_VERSION=2.11.7
+# Full image reference for the builder, may be in tag or digest form
+ARG CADDY_BUILDER_REF=caddy:2.11.9-builder-alpine
 
-# Runtime base that caddy:2.11-alpine uses
-ARG CADDY_ALPINE_VERSION=3.23
+# Runtime base, only sets the package set and CVE surface
+ARG CADDY_RUNTIME_REF=alpine:3.24.4
+
+ARG CADDY_MODULES="github.com/caddy-dns/cloudflare github.com/greenpau/caddy-security github.com/mholt/caddy-l4"
 
 # Stage 1: Build
-FROM caddy:${CADDY_BASE_VERSION}-builder-alpine AS builder
+FROM ${CADDY_BUILDER_REF} AS builder
 
 ARG CADDY_TARGET_VERSION
-ARG CADDY_MODULES="github.com/caddy-dns/cloudflare github.com/greenpau/caddy-security github.com/mholt/caddy-l4"
+ARG CADDY_MODULES
 
 ENV CADDY_VERSION=v${CADDY_TARGET_VERSION}
 WORKDIR /build
@@ -35,7 +37,7 @@ RUN set -eu; \
     echo "capability on built binary: $CAP"
 
 # Stage 2: Alpine
-FROM alpine:${CADDY_ALPINE_VERSION}
+FROM ${CADDY_RUNTIME_REF}
 
 RUN apk add --no-cache ca-certificates curl libcap mailcap
 
