@@ -247,7 +247,7 @@ jobs:
               echo "- **Tags:**"
               printf '%s\n' "$TAGS" | sed 's/^/  - `/' | sed 's/$/`/'
               echo
-              echo "- **Modules included:**"
+              echo "**Modules included:**"
               echo
               MODS="$(docker run --rm --entrypoint caddy "${DOCKER_IMAGE}:${CADDY_VERSION_TAG}-alpine" \
                         list-modules --versions --packages --skip-standard 2>/dev/null \
