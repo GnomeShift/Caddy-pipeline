@@ -220,36 +220,50 @@ jobs:
           provenance: mode=min
 
       - name: 'Summary'
-        if: always()
+        if: '!cancelled()'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: |-
+            ${{ env.DOCKER_IMAGE }}:${{ env.CADDY_VERSION_TAG }}-alpine
+            ${{ env.DOCKER_IMAGE }}:latest
         run: |
           {
-            echo "## ✅ Caddy image build complete"
-            echo ""
-            echo "- **Caddy version:** \`${CADDY_VERSION_FULL}\`"
-            echo "- **Image:** \`${DOCKER_IMAGE}\`"
-            if [ "$BYPASS_MODE" = "true" ]; then
-              echo "- **Base:** \`caddy:${CADDY_BASE_TAG}-builder-alpine\` / \`caddy:${CADDY_BASE_TAG}-alpine\`"
-            fi
-            echo "- **Tags:**"
-            echo "  - \`${DOCKER_IMAGE}:${CADDY_VERSION_TAG}-alpine\`"
-            echo "  - \`${DOCKER_IMAGE}:latest\`"
-            echo "- **Cache scope:** `${CACHE_SCOPE}`"
-            echo "- **Modules included:**"
-            echo ""
-            MODS="$(docker run --rm --entrypoint caddy "${DOCKER_IMAGE}:${CADDY_VERSION_TAG}-alpine" \
-                      list-modules --versions --packages --skip-standard 2>/dev/null \
-                    | sed 's/^[[:space:]]*//' | grep -v '^$' | grep -v 'modules:' | sort -u)" || MODS=""
-            if [ -n "$MODS" ]; then
-              echo "| Module | Version | Modules |"
-              echo "|:--|:--|--:|"
-              printf '%s\n' "$MODS" | awk 'NF>=3 {print $3" "$2}' | sort | uniq -c \
-              | awk '{printf "| `%s` | `%s` | %d |\n", $2, $3, $1}'
-              echo ""
-              printf 'Non-standard modules: `%s`, unique Go-packages: `%s`\n' \
-              "$(printf '%s\n' "$MODS" | awk 'NF>=3' | wc -l | tr -d ' ')" \
-              "$(printf '%s\n' "$MODS" | awk 'NF>=3 {print $3" "$2}' | sort -u | wc -l | tr -d ' ')"
+            if [ -z "$DIGEST" ]; then
+              echo "## ❌ Caddy image build failed"
+              echo
+              echo "- **Caddy version:** \`${CADDY_VERSION_FULL}\`"
+              echo "- **Image:** \`${DOCKER_IMAGE}\`"
+              echo "- **Cache scope:** \`${CACHE_SCOPE}\`"
             else
-              echo "Failed to get modules"
+              echo "## ✅ Caddy image build complete"
+              echo
+              echo "- **Caddy version:** \`${CADDY_VERSION_FULL}\`"
+              echo "- **Image:** \`${DOCKER_IMAGE}\`"
+              if [ "$BYPASS_MODE" = "true" ]; then
+                echo "- **Base:** \`caddy:${CADDY_BASE_TAG}-builder-alpine\` / \`caddy:${CADDY_BASE_TAG}-alpine\`"
+              fi
+              echo "- **Digest:** \`${DIGEST}\`"
+              echo "- **Cache scope:** \`${CACHE_SCOPE}\`"
+              echo "- **Tags:**"
+              printf '%s\n' "$TAGS" | sed 's/^/  - `/' | sed 's/$/`/'
+              echo
+              echo "- **Modules included:**"
+              echo
+              MODS="$(docker run --rm --entrypoint caddy "${DOCKER_IMAGE}:${CADDY_VERSION_TAG}-alpine" \
+                        list-modules --versions --packages --skip-standard 2>/dev/null \
+                      | sed 's/^[[:space:]]*//' | grep -v '^$' | grep -v 'modules:' | sort -u)" || MODS=""
+              if [ -n "$MODS" ]; then
+                echo "| Module | Version | Modules |"
+                echo "|:--|:--|--:|"
+                printf '%s\n' "$MODS" | awk 'NF>=3 {print $3" "$2}' | sort | uniq -c \
+                | awk '{printf "| `%s` | `%s` | %d |\n", $2, $3, $1}'
+                echo
+                printf 'Non-standard modules: `%s`, unique Go-packages: `%s`\n' \
+                "$(printf '%s\n' "$MODS" | awk 'NF>=3' | wc -l | tr -d ' ')" \
+                "$(printf '%s\n' "$MODS" | awk 'NF>=3 {print $3" "$2}' | sort -u | wc -l | tr -d ' ')"
+              else
+                echo "Failed to get modules"
+              fi
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
