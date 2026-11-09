@@ -36,7 +36,7 @@ RUN set -eu; \
     [ -n "$CAP" ] || { echo "FATAL: setcap had no effect" >&2; exit 1; }; \
     echo "capability on built binary: $CAP"
 
-# Stage 2: Alpine
+# Stage 2: Runtime
 FROM ${CADDY_RUNTIME_REF}
 
 RUN apk add --no-cache ca-certificates curl libcap mailcap
