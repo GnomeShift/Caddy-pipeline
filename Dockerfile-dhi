@@ -1,0 +1,68 @@
+# Version that xcaddy compiles, may be newer than the published images
+ARG CADDY_TARGET_VERSION=2.11.9
+
+# DHI Go dev image reference for the builder, may be in tag or digest form
+ARG CADDY_BUILDER_REF=dhi.io/golang:1.27-debian13-dev
+
+# Hardened Caddy dev image
+ARG CADDY_RUNTIME_REF=dhi.io/caddy:2.11.9-debian13-dev
+
+ARG CADDY_MODULES="github.com/caddy-dns/cloudflare github.com/greenpau/caddy-security github.com/mholt/caddy-l4"
+
+# Stage 1: Build
+FROM ${CADDY_BUILDER_REF} AS builder
+
+ARG CADDY_TARGET_VERSION
+ARG CADDY_MODULES
+
+ENV CADDY_VERSION=v${CADDY_TARGET_VERSION}
+WORKDIR /build
+
+RUN set -eu; \
+    set -f; \
+    GOBIN=/build/bin CGO_ENABLED=0 go install "github.com/caddyserver/xcaddy/cmd/xcaddy@latest"; \
+    set --; \
+    for mod in ${CADDY_MODULES}; do \
+      set -- "$@" --with "$mod"; \
+    done; \
+    CGO_ENABLED=0 xcaddy build "${CADDY_VERSION}" \
+      --output /build/caddy "$@"; \
+    BUILT="$(/build/caddy version | head -n1)"; \
+    case "$BUILT" in \
+      "${CADDY_VERSION}"|"${CADDY_VERSION} "*|"${CADDY_VERSION}+"*) echo "built ${BUILT}" ;; \
+      *) echo "VERSION MISMATCH: expected '${CADDY_VERSION}', got '${BUILT}'" >&2; exit 1 ;; \
+    esac;
+
+# Stage 2: Runtime
+FROM ${CADDY_RUNTIME_REF}
+
+ENV XDG_CONFIG_HOME=/config
+ENV XDG_DATA_HOME=/data
+
+ARG CADDY_TARGET_VERSION
+ENV CADDY_VERSION=v${CADDY_TARGET_VERSION}
+
+LABEL org.opencontainers.image.version=v${CADDY_TARGET_VERSION} \
+      org.opencontainers.image.title=Caddy \
+      org.opencontainers.image.description="a powerful, enterprise-ready, open source web server with automatic HTTPS written in Go" \
+      org.opencontainers.image.url=https://caddyserver.com \
+      org.opencontainers.image.documentation=https://caddyserver.com/docs \
+      org.opencontainers.image.vendor="Light Code Labs" \
+      org.opencontainers.image.licenses=Apache-2.0 \
+      org.opencontainers.image.source="https://github.com/caddyserver/caddy-docker" \
+      org.opencontainers.image.base.name="dhi.io/caddy"
+
+COPY --from=builder /build/caddy /usr/bin/caddy
+
+RUN set -eu; \
+    V="$(caddy version | head -n1)"; \
+    echo "$V"; \
+    case "$V" in \
+      "${CADDY_VERSION}"|"${CADDY_VERSION} "*|"${CADDY_VERSION}+"*) ;; \
+      *) echo "FATAL: version '$V', expected ${CADDY_VERSION}" >&2; exit 1 ;; \
+    esac
+
+EXPOSE 80
+EXPOSE 443
+EXPOSE 443/udp
+EXPOSE 2019

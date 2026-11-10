@@ -1,0 +1,298 @@
+name: Build custom Caddy DHI
+
+on:
+  workflow_dispatch:
+    inputs:
+      caddy_modules:
+        description: 'Caddy modules to include (space-separated)'
+        required: true
+        default: 'github.com/caddy-dns/cloudflare github.com/greenpau/caddy-security github.com/mholt/caddy-l4'
+      docker_image_name:
+        description: 'Docker image name'
+        required: true
+        default: 'caddy-test'
+      caddy_version:
+        description: 'Caddy version to build'
+        required: false
+        default: 'latest'
+      go_builder_version:
+        description: 'DHI Go builder version'
+        required: false
+        default: 'latest'
+
+concurrency:
+  group: caddy-dhi-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  resolve-versions:
+    name: 'Resolve versions'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      caddy_version: ${{ steps.caddy.outputs.version }}
+      caddy_full_tag: ${{ steps.caddy.outputs.full_tag }}
+      builder_ref: ${{ steps.refs.outputs.builder_ref }}
+      runtime_ref: ${{ steps.refs.outputs.runtime_ref }}
+      modules: ${{ steps.validate.outputs.modules }}
+    steps:
+      - name: 'Get selected Caddy release'
+        id: caddy
+        env:
+          INPUT_VERSION: ${{ inputs.caddy_version }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          API=https://api.github.com/repos/caddyserver/caddy/releases
+
+          if [ -z "$INPUT_VERSION" ] || [ "$INPUT_VERSION" = "latest" ]; then
+            LATEST_TAG=$(curl -fsSL \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "${API}/latest" | jq -er .tag_name)
+          else
+            VERSION="${INPUT_VERSION#v}"
+            if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::Invalid Caddy version: $INPUT_VERSION" >&2
+              exit 1
+            fi
+            LATEST_TAG="v${VERSION}"
+            curl -fsSL \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "${API}/tags/${LATEST_TAG}" | jq -er .tag_name >/dev/null
+          fi
+
+          VERSION="${LATEST_TAG#v}"
+          echo "Selected Caddy release: ${LATEST_TAG}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "full_tag=${LATEST_TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: 'Validate module input'
+        id: validate
+        env:
+          MODULES: ${{ inputs.caddy_modules }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$MODULES" =~ ^[A-Za-z0-9._/-]+(@[A-Za-z0-9._+-]+)?([[:blank:]]+[A-Za-z0-9._/-]+(@[A-Za-z0-9._+-]+)?)*$ ]]; then
+            echo "::error::Incorrect module list: '$MODULES'."
+            echo "::error::Space-separated list expected."
+            exit 1
+          fi
+          echo "Module list accepted: $MODULES"
+          echo "modules=$MODULES" >> "$GITHUB_OUTPUT"
+
+      - name: 'Compose DHI base image references'
+        id: refs
+        env:
+          TARGET_VERSION: ${{ steps.caddy.outputs.version }}
+          GO_VERSION: ${{ inputs.go_builder_version }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$GO_VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            echo "::error::Invalid go_builder_version: '$GO_VERSION'" >&2
+            exit 1
+          fi
+          BUILDER="dhi.io/golang:${GO_VERSION}-debian13-dev"
+          RUNTIME="dhi.io/caddy:${TARGET_VERSION}-debian13"
+          echo "builder_ref=${BUILDER}" >> "$GITHUB_OUTPUT"
+          echo "runtime_ref=${RUNTIME}" >> "$GITHUB_OUTPUT"
+          echo "DHI builder: ${BUILDER}"
+          echo "DHI runtime: ${RUNTIME}"
+
+  build-and-push:
+    name: 'Build and push'
+    needs: resolve-versions
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    permissions:
+      contents: read
+      actions: read
+      packages: write
+    env:
+      CADDY_VERSION_TAG: ${{ needs.resolve-versions.outputs.caddy_version }}
+      CADDY_VERSION_FULL: ${{ needs.resolve-versions.outputs.caddy_full_tag }}
+      BUILDER_REF: ${{ needs.resolve-versions.outputs.builder_ref }}
+      RUNTIME_REF: ${{ needs.resolve-versions.outputs.runtime_ref }}
+      DOCKER_IMAGE: ${{ vars.DOCKERHUB_LOGIN }}/${{ inputs.docker_image_name }}
+      MODULES: ${{ needs.resolve-versions.outputs.modules }}
+      CACHE_SCOPE: caddy-dhi-${{ needs.resolve-versions.outputs.caddy_version }}-${{ github.ref_name }}
+    steps:
+      - name: 'Checkout code'
+        uses: actions/checkout@v5
+
+      - name: 'Setup QEMU'
+        uses: docker/setup-qemu-action@v4
+
+      - name: 'Setup Docker Buildx'
+        id: buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: 'Login to Docker Hub'
+        uses: docker/login-action@v4
+        with:
+          username: ${{ vars.DOCKERHUB_LOGIN }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+
+      - name: 'Login to dhi.io'
+        uses: docker/login-action@v4
+        with:
+          registry: dhi.io
+          username: ${{ vars.DOCKERHUB_LOGIN }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
+
+      - name: 'Build and push Caddy DHI image'
+        id: build
+        uses: docker/build-push-action@v7
+        env:
+          BUILDKIT_PROGRESS: plain
+        with:
+          context: .
+          file: ./Dockerfile-dhi
+          pull: true
+          push: true
+          tags: |
+            ${{ env.DOCKER_IMAGE }}:${{ env.CADDY_VERSION_TAG }}-debian13-dev
+            ${{ env.DOCKER_IMAGE }}:latest
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha,scope=${{ env.CACHE_SCOPE }}
+          cache-to: type=gha,mode=max,scope=${{ env.CACHE_SCOPE }},ignore-error=true
+          build-args: |
+            CADDY_TARGET_VERSION=${{ env.CADDY_VERSION_TAG }}
+            CADDY_BUILDER_REF=${{ env.BUILDER_REF }}
+            CADDY_RUNTIME_REF=${{ env.RUNTIME_REF }}
+            CADDY_MODULES=${{ env.MODULES }}
+          sbom: true
+          provenance: mode=min
+
+      - name: 'Summary'
+        if: '!cancelled()'
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: |-
+            ${{ env.DOCKER_IMAGE }}:${{ env.CADDY_VERSION_TAG }}-debian13-dev
+            ${{ env.DOCKER_IMAGE }}:latest
+        run: |
+          {
+            if [ -z "$DIGEST" ]; then
+              echo "## ❌ Caddy DHI build failed"
+              echo
+              echo "- **Caddy version:** \`${CADDY_VERSION_FULL}\`"
+              echo "- **Image:** \`${DOCKER_IMAGE}\`"
+              echo "- **DHI runtime base:** \`${RUNTIME_REF}\`"
+              echo "- **DHI builder base:** \`${BUILDER_REF}\`"
+              echo "- **Cache scope:** \`${CACHE_SCOPE}\`"
+            else
+              echo "## ✅ Caddy DHI build complete"
+              echo
+              echo "- **Caddy version:** \`${CADDY_VERSION_FULL}\`"
+              echo "- **Image:** \`${DOCKER_IMAGE}\`"
+              echo "- **DHI runtime base:** \`${RUNTIME_REF}\`"
+              echo "- **DHI builder base:** \`${BUILDER_REF}\`"
+              echo "- **Digest:** \`${DIGEST}\`"
+              echo "- **Cache scope:** \`${CACHE_SCOPE}\`"
+              echo "- **Tags:**"
+              printf '%s\n' "$TAGS" | sed 's/^/  - `/' | sed 's/$/`/'
+              echo
+              echo "**Modules included:**"
+              echo
+              MODS="$(docker run --rm --entrypoint caddy "${DOCKER_IMAGE}:${CADDY_VERSION_TAG}-debian13-dev" \
+                        list-modules --versions --packages --skip-standard 2>/dev/null \
+                      | sed 's/^[[:space:]]*//' | grep -v '^$' | grep -v 'modules:' | sort -u)" || MODS=""
+              if [ -n "$MODS" ]; then
+                echo "| Module | Version | Modules |"
+                echo "|:--|:--|--:|"
+                printf '%s\n' "$MODS" | awk 'NF>=3 {print $3" "$2}' | sort | uniq -c \
+                | awk '{printf "| `%s` | `%s` | %d |\n", $2, $3, $1}'
+                echo
+                printf 'Non-standard modules: `%s`, unique Go-packages: `%s`\n' \
+                "$(printf '%s\n' "$MODS" | awk 'NF>=3' | wc -l | tr -d ' ')" \
+                "$(printf '%s\n' "$MODS" | awk 'NF>=3 {print $3" "$2}' | sort -u | wc -l | tr -d ' ')"
+              else
+                echo "Failed to get modules"
+              fi
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  scan:
+    name: 'Vulnerability scan'
+    needs: build-and-push
+    if: always() && needs.build-and-push.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      DOCKER_IMAGE: ${{ vars.DOCKERHUB_LOGIN }}/${{ inputs.docker_image_name }}
+    steps:
+      - name: 'Trivy scan'
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: 'image'
+          image-ref: ${{ env.DOCKER_IMAGE }}@${{ needs.build-and-push.outputs.digest }}
+          format: 'json'
+          output: 'trivy-dhi.json'
+          severity: 'LOW,MEDIUM,HIGH,CRITICAL'
+          exit-code: '0'
+
+      - name: 'Scan summary'
+        if: always()
+        continue-on-error: true
+        run: |
+          cat > .trivy-report.jq <<'JQEOF'
+          def sev_badge:
+            if   . == "CRITICAL" then "🔴 CRITICAL"
+            elif . == "HIGH"     then "🟠 HIGH"
+            elif . == "MEDIUM"   then "🟡 MEDIUM"
+            elif . == "LOW"      then "🔵 LOW"
+            else "⚪ " + . end;
+
+          def cell: gsub("\\|"; "/") | gsub("\n"; " ");
+          def sev_rank: if . == "CRITICAL" then 0 elif . == "HIGH" then 1 elif . == "MEDIUM" then 2 elif . == "LOW" then 3 else 4 end;
+
+          [ .Results[]? as $r
+            | ($r.Vulnerabilities // [])[]
+            | . + { __class: ($r.Class // "unknown") }
+          ] as $v
+          | ($v | length) as $total
+          | ($v | map(.Severity) | unique | sort_by(sev_rank)) as $seen
+          | (
+              if $total == 0 then
+                "✅ No findings\n"
+              else
+                "**Total findings: \($total)**\n\n"
+                + "| Severity | Found |\n|:--|--:|\n"
+                + (reduce $seen[] as $s ("";
+                    . + "| \($s | sev_badge) | \($v | map(select(.Severity == $s)) | length) |\n"))
+                + "\n"
+                + "| Severity | CVE | Package | Installed | Fixed in | Source |\n|:--|:--|:--|:--|:--|:--|\n"
+                + ($v
+                   | sort_by([ (.Severity | sev_rank), (.VulnerabilityID // ""), (.PkgName // "") ])
+                   | .[:50]
+                   | map("| \(.Severity | sev_badge) | \(.VulnerabilityID // "?" | cell) | \(.PkgName // "?" | cell) | \(.InstalledVersion // "?" | cell) | \(.FixedVersion // "-" | cell) | \(.__class | cell) |")
+                   | join("\n"))
+                + "\n"
+                + (if $total > 50
+                   then "\n_The first 50 of \($total) are shown. See more in scan logs_\n"
+                   else "" end)
+              end
+            )
+          JQEOF
+
+          {
+            echo "### 🛡️ Vulnerabilities"
+            for pair in "trivy-dhi.json"; do
+              f="${pair#*:}"
+              echo ""
+              if [ -s "$f" ] && jq -e . "$f" >/dev/null 2>&1; then
+                jq -r -f .trivy-report.jq "$f" \
+                  || echo "❌ jq failed to parse summary"
+              else
+                echo "❌ Scan failed"
+              fi
+              echo ""
+            done
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
