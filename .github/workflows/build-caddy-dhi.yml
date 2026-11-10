@@ -159,7 +159,6 @@ jobs:
           push: true
           tags: |
             ${{ env.DOCKER_IMAGE }}:${{ env.CADDY_VERSION_TAG }}-debian13-dev
-            ${{ env.DOCKER_IMAGE }}:latest
           platforms: linux/amd64,linux/arm64
           cache-from: type=gha,scope=${{ env.CACHE_SCOPE }}
           cache-to: type=gha,mode=max,scope=${{ env.CACHE_SCOPE }},ignore-error=true
@@ -177,7 +176,6 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
           TAGS: |-
             ${{ env.DOCKER_IMAGE }}:${{ env.CADDY_VERSION_TAG }}-debian13-dev
-            ${{ env.DOCKER_IMAGE }}:latest
         run: |
           {
             if [ -z "$DIGEST" ]; then

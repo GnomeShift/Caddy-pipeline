@@ -25,7 +25,7 @@ RUN set -eu; \
     for mod in ${CADDY_MODULES}; do \
       set -- "$@" --with "$mod"; \
     done; \
-    CGO_ENABLED=0 xcaddy build "${CADDY_VERSION}" \
+    CGO_ENABLED=0 /build/bin/xcaddy build "${CADDY_VERSION}" \
       --output /build/caddy "$@"; \
     BUILT="$(/build/caddy version | head -n1)"; \
     case "$BUILT" in \
