@@ -90,12 +90,16 @@ jobs:
           GO_VERSION: ${{ inputs.go_builder_version }}
         run: |
           set -euo pipefail
-          if [[ ! "$GO_VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+          if [ "$GO_VERSION" = "latest" ]; then
+            GO_TAG="1-debian13-dev"
+          elif [[ "$GO_VERSION" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]]; then
+            GO_TAG="${GO_VERSION}-debian13-dev"
+          else
             echo "::error::Invalid go_builder_version: '$GO_VERSION'" >&2
             exit 1
           fi
-          BUILDER="dhi.io/golang:${GO_VERSION}-debian13-dev"
-          RUNTIME="dhi.io/caddy:${TARGET_VERSION}-debian13"
+          BUILDER="dhi.io/golang:${GO_TAG}"
+          RUNTIME="dhi.io/caddy:${TARGET_VERSION}-debian13-dev"
           echo "builder_ref=${BUILDER}" >> "$GITHUB_OUTPUT"
           echo "runtime_ref=${RUNTIME}" >> "$GITHUB_OUTPUT"
           echo "DHI builder: ${BUILDER}"
